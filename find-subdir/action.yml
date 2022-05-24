@@ -31,7 +31,7 @@ runs:
           - "${{ inputs.filter_directory }}/**"
     - name: Get unique environment
       id: unique_directory_array
-      uses:  pepsico-ecommerce/github_actions_helpers/edwardgeorge/jq-action@main
+      uses:  pepsico-ecommerce/github_actions_helpers/jq-action@main
       with:
         input: ${{ steps.get_changed_files.outputs.files_changed_files }} 
         script: '. | map( split("/") | del(.[-1]) | join("/") | select(. | match("^((?!${{ inputs.exclude_subdirectory }}).)*$"))) | unique'
