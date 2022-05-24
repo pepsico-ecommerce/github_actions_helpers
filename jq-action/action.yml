@@ -1,0 +1,25 @@
+name: 'JQ Script'
+description: 'Run JQ on a JSON value'
+inputs:
+  input:
+    required: true
+  script:
+    required: true
+  compact:
+    required: false
+    default: 'false'
+  raw-output:
+    required: false
+    default: 'false'
+  remove-trailing-newline:
+    required: false
+    default: 'true'
+outputs:
+  output:
+    description: 'output from the jq command'
+runs:
+  using: 'node12'
+  main: 'index.js'
+branding:
+  icon: chevron-right
+  color: white
