@@ -1,0 +1,38 @@
+name: "Find subdirectory"
+description: "Takes in a directory filter and returns unique subdirectory filter"
+inputs:
+  filter_directory:
+    description: 'Root directory results of changed files that needs to be filtered by'
+    required: true
+  exclude_subdirectory:
+    default: "\n"
+    description: 'Exclude statement on any directories'
+    required: false
+outputs:
+  files_changed_boolean:
+    description: 'Boolean if files matched filter_directory'
+    value: ${{ steps.get_changed_files.outputs.files_changed }}
+  unique_directory_matrix:
+    description: 'Directory changed matrix'
+    value: ${{ steps.unique_directory_array.outputs.output }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    - uses:  pepsico-ecommerce/github_actions_helpers/paths-filter@main
+      name: Find all changed files
+      id: get_changed_files
+      with:
+        list-files: 'json'
+        filters: |
+          files_changed:
+          - "${{ inputs.filter_directory }}/**"
+    - name: Get unique environment
+      id: unique_directory_array
+      uses:  pepsico-ecommerce/github_actions_helpers/jq-action@main
+      with:
+        input: ${{ steps.get_changed_files.outputs.files_changed_files }} 
+        script: '. | map( split("/") | del(.[-1]) | join("/") | select(. | match("^((?!${{ inputs.exclude_subdirectory }}).)*$"))) | unique'
+        compact: true
