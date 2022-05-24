@@ -1,4 +1,4 @@
-FROM danielflook/terraform-github-actions-base:latest
+FROM registry.nonprod01.use1.pepstaging.com/danielflook/terraform-github-actions-base:latest
 
 COPY src/ /tmp/src/
 COPY setup.py /tmp
