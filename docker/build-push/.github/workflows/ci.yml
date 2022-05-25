@@ -1,0 +1,836 @@
+name: ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'master'
+  pull_request:
+    branches:
+      - 'master'
+
+jobs:
+  minimal:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+        with:
+          path: action
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      -
+        name: Build
+        uses: ./action
+        with:
+          file: ./test/Dockerfile
+
+  git-context:
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+        with:
+          path: action
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          version: latest
+          driver-opts: network=host
+      -
+        name: Build and push
+        id: docker_build
+        uses: ./action
+        with:
+          file: ./test/Dockerfile
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            localhost:5000/name/app:latest
+            localhost:5000/name/app:1.0.0
+      -
+        name: Inspect
+        run: |
+          docker buildx imagetools inspect localhost:5000/name/app:1.0.0
+      -
+        name: Check digest
+        run: |
+          if [ -z "${{ steps.docker_build.outputs.digest }}" ]; then
+            echo "::error::Digest should not be empty"
+            exit 1
+          fi
+
+  git-context-secret:
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+        with:
+          path: action
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver-opts: network=host
+      -
+        name: Build and push
+        id: docker_build
+        uses: ./action
+        with:
+          file: ./test/Dockerfile
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            localhost:5000/name/app:latest
+            localhost:5000/name/app:1.0.0
+          secrets: |
+            GIT_AUTH_TOKEN=${{ github.token }}
+            "MYSECRET=aaaaaaaa
+            bbbbbbb
+            ccccccccc"
+            FOO=bar
+            "EMPTYLINE=aaaa
+
+            bbbb
+            ccc"
+      -
+        name: Inspect
+        run: |
+          docker buildx imagetools inspect localhost:5000/name/app:1.0.0
+      -
+        name: Check digest
+        run: |
+          if [ -z "${{ steps.docker_build.outputs.digest }}" ]; then
+            echo "::error::Digest should not be empty"
+            exit 1
+          fi
+
+  path-context:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        buildx-version:
+          - ""
+          - latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          version: ${{ matrix.buildx-version }}
+          driver-opts: network=host
+      -
+        name: Build and push
+        id: docker_build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/Dockerfile
+          builder: ${{ steps.buildx.outputs.name }}
+          push: true
+          tags: |
+            localhost:5000/name/app:latest
+            localhost:5000/name/app:1.0.0
+      -
+        name: Inspect
+        run: |
+          docker buildx imagetools inspect localhost:5000/name/app:1.0.0
+      -
+        name: Check digest
+        run: |
+          if [ -z "${{ steps.docker_build.outputs.digest }}" ]; then
+            echo "::error::Digest should not be empty"
+            exit 1
+          fi
+
+  error:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Stop docker
+        run: |
+          sudo systemctl stop docker
+      -
+        name: Build
+        id: docker_build
+        continue-on-error: true
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/Dockerfile
+      -
+        name: Check
+        run: |
+          echo "${{ toJson(steps.docker_build) }}"
+          if [ "${{ steps.docker_build.outcome }}" != "failure" ] || [ "${{ steps.docker_build.conclusion }}" != "success" ]; then
+            echo "::error::Should have failed"
+            exit 1
+          fi
+
+  error-buildx:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      -
+        name: Build
+        id: docker_build
+        continue-on-error: true
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/Dockerfile
+          platforms: linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/ppc64le,linux/s390x
+          push: true
+          tags: localhost:5000/name/app:latest
+      -
+        name: Check
+        run: |
+          echo "${{ toJson(steps.docker_build) }}"
+          if [ "${{ steps.docker_build.outcome }}" != "failure" ] || [ "${{ steps.docker_build.conclusion }}" != "success" ]; then
+            echo "::error::Should have failed"
+            exit 1
+          fi
+
+  docker-driver:
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Build
+        id: docker_build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/Dockerfile
+          push: true
+          tags: localhost:5000/name/app:latest
+
+  export-docker:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/Dockerfile
+          load: true
+          tags: myimage:latest
+      -
+        name: Inspect
+        run: |
+          docker image inspect myimage:latest
+
+  network:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      -
+        name: List networks
+        run: docker network ls
+      -
+        name: Build
+        uses: ./
+        with:
+          context: ./test
+          tags: name/app:latest
+          network: host
+
+  shm-size:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          version: v0.7.0
+          driver-opts: |
+            image=moby/buildkit:master
+      -
+        name: Build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/shmsize.Dockerfile
+          tags: name/app:latest
+          shm-size: 2g
+
+  ulimit:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          version: v0.7.0
+          driver-opts: |
+            image=moby/buildkit:master
+      -
+        name: Build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/ulimit.Dockerfile
+          tags: name/app:latest
+          ulimit: |
+            nofile=1024:1024
+            nproc=3
+
+  cgroup-parent:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          version: v0.7.0
+          driver-opts: |
+            image=moby/buildkit:master
+      -
+        name: Build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/cgroup.Dockerfile
+          tags: name/app:latest
+          cgroup-parent: foo
+
+  add-hosts:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      -
+        name: Build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/addhost.Dockerfile
+          tags: name/app:latest
+          add-hosts: |
+            docker:10.180.0.1
+            foo:10.0.0.1
+
+  build-contexts:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          version: v0.8.0
+      -
+        name: Build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/buildcontext.Dockerfile
+          build-contexts: |
+            alpine=docker-image://debian:stable-slim
+          tags: name/app:latest
+
+  multi:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        buildx-version:
+          - ""
+          - latest
+        dockerfile:
+          - multi
+          - multi-sudo
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          version: ${{ matrix.buildx-version }}
+          driver-opts: network=host
+      -
+        name: Build and push
+        id: docker_build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/${{ matrix.dockerfile }}.Dockerfile
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            localhost:5000/name/app:latest
+            localhost:5000/name/app:1.0.0
+      -
+        name: Inspect
+        run: |
+          docker buildx imagetools inspect localhost:5000/name/app:1.0.0
+      -
+        name: Check digest
+        run: |
+          if [ -z "${{ steps.docker_build.outputs.digest }}" ]; then
+            echo "::error::Digest should not be empty"
+            exit 1
+          fi
+
+  digest:
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_IMAGE: localhost:5000/name/app
+    strategy:
+      fail-fast: false
+      matrix:
+        driver:
+          - docker
+          - docker-container
+        load:
+          - true
+          - false
+        push:
+          - true
+          - false
+        exclude:
+          - driver: docker
+            load: true
+            push: true
+          - driver: docker-container
+            load: true
+            push: true
+          - driver: docker
+            load: false
+            push: false
+          - driver: docker-container
+            load: false
+            push: false
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          version: v0.8.0
+          driver: ${{ matrix.driver }}
+          driver-opts: |
+            network=host
+      -
+        name: Build
+        id: docker_build
+        uses: ./
+        with:
+          context: ./test
+          load: ${{ matrix.load }}
+          push: ${{ matrix.push }}
+          tags: ${{ env.DOCKER_IMAGE }}:latest
+          platforms: ${{ matrix.platforms }}
+      -
+        name: Docker images
+        run: |
+          docker image ls --no-trunc
+      -
+        name: Check digest
+        if: ${{ matrix.push }}
+        run: |
+          if [ -z "${{ steps.docker_build.outputs.digest }}" ]; then
+            echo "::error::Digest should not be empty"
+            exit 1
+          fi
+      -
+        name: Check manifest
+        if: ${{ matrix.push }}
+        run: |
+          set -x
+          docker buildx imagetools inspect ${{ env.DOCKER_IMAGE }}@${{ steps.docker_build.outputs.digest }} --format '{{json .}}'
+      -
+        name: Check image ID
+        run: |
+          if [ -z "${{ steps.docker_build.outputs.imageid }}" ]; then
+            echo "::error::Image ID should not be empty"
+            exit 1
+          fi
+      -
+        name: Inspect image
+        if: ${{ matrix.load }}
+        run: |
+          set -x
+          docker image inspect ${{ steps.docker_build.outputs.imageid }}
+
+  registry-cache:
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver-opts: |
+            network=host
+      -
+        name: Build and push (1)
+        id: docker_build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/multi.Dockerfile
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            localhost:5000/name/app:latest
+            localhost:5000/name/app:1.0.0
+          cache-from: type=registry,ref=localhost:5000/name/app
+          cache-to: type=inline
+      -
+        name: Inspect (1)
+        run: |
+          docker buildx imagetools inspect localhost:5000/name/app:latest
+      -
+        name: Check digest (1)
+        run: |
+          if [ -z "${{ steps.docker_build.outputs.digest }}" ]; then
+            echo "::error::Digest should not be empty"
+            exit 1
+          fi
+      -
+        name: Prune
+        run: |
+          docker buildx prune -a -f --verbose
+      -
+        name: Build and push (2)
+        id: docker_build2
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/multi.Dockerfile
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            localhost:5000/name/app:latest
+            localhost:5000/name/app:1.0.0
+          cache-from: type=registry,ref=localhost:5000/name/app
+          cache-to: type=inline
+      -
+        name: Inspect (2)
+        run: |
+          docker buildx imagetools inspect localhost:5000/name/app:latest
+      -
+        name: Check digest (2)
+        run: |
+          if [ -z "${{ steps.docker_build2.outputs.digest }}" ]; then
+            echo "::error::Digest should not be empty"
+            exit 1
+          fi
+      -
+        name: Compare digests
+        run: |
+          echo Compare "${{ steps.docker_build.outputs.digest }}" with "${{ steps.docker_build2.outputs.digest }}"
+          if [ "${{ steps.docker_build.outputs.digest }}" != "${{ steps.docker_build2.outputs.digest }}" ]; then
+            echo "::error::Digests should be identical"
+            exit 1
+          fi
+
+  local-cache-first:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.docker_build.outputs.digest }}
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver-opts: |
+            network=host
+      -
+        name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-local-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-ghcache-
+      -
+        name: Erase cache
+        run: |
+          rm -rf /tmp/.buildx-cache/*
+      -
+        name: Build and push
+        id: docker_build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/multi.Dockerfile
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            localhost:5000/name/app:latest
+            localhost:5000/name/app:1.0.0
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+      -
+        name: Inspect
+        run: |
+          docker buildx imagetools inspect localhost:5000/name/app:1.0.0
+      -
+        name: Check digest
+        run: |
+          if [ -z "${{ steps.docker_build.outputs.digest }}" ]; then
+            echo "::error::Digest should not be empty"
+            exit 1
+          fi
+
+  local-cache-hit:
+    runs-on: ubuntu-latest
+    needs: local-cache-first
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver-opts: |
+            network=host
+      -
+        name: Cache Docker layers
+        uses: actions/cache@v3
+        id: cache
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-local-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-ghcache-
+      -
+        name: Build and push
+        id: docker_build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/multi.Dockerfile
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            localhost:5000/name/app:latest
+            localhost:5000/name/app:1.0.0
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+      -
+        name: Inspect
+        run: |
+          docker buildx imagetools inspect localhost:5000/name/app:1.0.0
+      -
+        name: Check digest
+        run: |
+          if [ -z "${{ steps.docker_build.outputs.digest }}" ]; then
+            echo "::error::Digest should not be empty"
+            exit 1
+          fi
+      -
+        name: Compare digests
+        run: |
+          echo Compare "${{ needs.local-cache-first.outputs.digest }}" with "${{ steps.docker_build.outputs.digest }}"
+          if [ "${{ needs.local-cache-first.outputs.digest }}" != "${{ steps.docker_build.outputs.digest }}" ]; then
+            echo "::error::Digests should be identical"
+            exit 1
+          fi
+      -
+        name: Cache hit
+        run: echo ${{ steps.cache.outputs.cache-hit }}
+
+  github-cache:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        buildx_version:
+          - ""
+          - latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          version: ${{ matrix.buildx_version }}
+          driver-opts: |
+            network=host
+          buildkitd-flags: --debug
+      -
+        name: Build and push
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/multi.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            localhost:5000/name/app:latest
+            localhost:5000/name/app:1.0.0
+          cache-from: type=gha,scope=ci-${{ matrix.buildx_version }}
+          cache-to: type=gha,scope=ci-${{ matrix.buildx_version }}
+      -
+        name: Inspect
+        run: |
+          docker buildx imagetools inspect localhost:5000/name/app:1.0.0
+
+  standalone:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Uninstall moby cli
+        run: |
+          sudo apt-get purge -y moby-cli moby-buildx
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      -
+        name: Build
+        uses: ./
+        with:
+          context: ./test
+          file: ./test/Dockerfile
